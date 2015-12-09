@@ -20,136 +20,6 @@ def print_binary(header):
         i += 1
     print()
 
-
-def checksum(msg):
-    s = 0
-
-    for i in range(0, len(msg), 2):
-        if i + 1 < len(msg):
-            w = msg[i] + (msg[i + 1] << 8)
-        else:
-            w = msg[i]
-        s += w
-
-    s = (s >> 16) + (s & 0xffff)
-    s += (s >> 16)
-
-    s = ~s & 0xffff
-
-    return s
-
-
-def build_packet(src_ip, dst_ip, length):
-
-    # pacote deve ter esse formato de acordo com a rfc2544
-    """
-    UDP echo request on Ethernet
-
-           -- DATAGRAM HEADER
-           offset data (hex)            description
-           00     xx xx xx xx xx xx     set to dest MAC address
-           06     xx xx xx xx xx xx     set to source MAC address
-           12     08 00                 type
-
-           -- IP HEADER
-           14     45                    IP version - 4 header length 5 4
-          byte units
-           15     00                    TOS
-           16     00 2E                 total length*
-           18     00 00                 ID
-           20     00 00                 flags (3 bits) - 0 fragment
-          offset-0
-           22     0A                    TTL
-           23     11                    protocol - 17 (UDP)
-           24     C4 8D                 header checksum*
-           26     xx xx xx xx           set to source IP address**
-           30     xx xx xx xx           set to destination IP address**
-
-           -- UDP HEADER
-           34     C0 20                 source port
-           36     00 07                 destination port 07 = Echo
-           38     00 1A                 UDP message length*
-           40     00 00                 UDP checksum
-
-           -- UDP DATA
-           42     00 01 02 03 04 05 06 07    some data***
-           50     08 09 0A 0B 0C 0D 0E 0F
-
-          * - change for different length frames
-
-          ** - change for different logical streams
-
-          *** - fill remainder of frame with incrementing octets,
-          repeated if required by frame length
-
-    Values to be used in Total Length and UDP message length fields
-    """
-
-    # ip header
-    ip_version = 0x45         # 1 byte, version + ihl
-    ip_tos = 0x00             # 1 byte, dscp+ecn
-    ip_total_length = 0x0000  # 2 bytes, kernel will calculate
-    ip_id = 0x0000            # 2 bytes
-    ip_frag_offset = 0x0000   # 2 bytes, flags + fragment offset
-    ip_ttl = 0x0a             # 1 byte
-    ip_protocol = socket.IPPROTO_UDP  # 1 byte
-    ip_checksum = 0x0000      # 2 bytes, kernel will calculate
-    # 4 bytes, converte string pra bytes
-    ip_src_addr = socket.inet_aton(src_ip)
-    # 4 bytes, converte string pra bytes
-    ip_dest_addr = socket.inet_aton(dst_ip)
-
-    """
-    ! = network order (big-endian)
-    B = unsigned byte -> [0, 255]
-    H = unsigned word -> [0,65535]
-    4s = char[4] -> [0, 255]x4
-    """
-    ip_header = struct.pack('!BBHHHBBH4s4s', ip_version, ip_tos,
-                            ip_total_length, ip_id, ip_frag_offset, ip_ttl,
-                            ip_protocol, ip_checksum, ip_src_addr,
-                            ip_dest_addr)
-
-    # udp header
-    udp_src_port = 0xc020   # 2 bytes
-    udp_dest_port = 0x0007  # 2 bytes
-    udp_msg_length = 0      # 2 bytes
-    udp_checksum = 0        # 2 bytes
-
-    # ! network order (big-endian)
-    # H = unsigned word -> [0,65535]
-    udp_header = struct.pack("!HHHH", udp_src_port, udp_dest_port,
-                             udp_msg_length, udp_checksum)
-
-    """
-    Send LENGHT - 46 (46 == ethernet (14) + ip (20) + udp headers (8)) bytes
-    """
-    udp_data = '!'.encode('ascii')
-    udp_data += ("*" * (length - 44)).encode('ascii')
-    udp_data += '!'.encode('ascii')
-
-    src_addr = socket.inet_aton(src_ip)
-    dest_addr = socket.inet_aton(dst_ip)
-    placeholder = 0
-    protocol = socket.IPPROTO_UDP
-    udp_length = len(udp_header) + len(udp_data)
-
-    # header pra calcular o checksum do udp
-    pseudo_header = struct.pack('!4s4sBBH', src_addr, dest_addr, placeholder,
-                                protocol, udp_length)
-    pseudo_header += udp_header + udp_data
-
-    udp_checksum = checksum(pseudo_header)
-    udp_header = struct.pack('!HHHH', udp_src_port, udp_dest_port, udp_length,
-                             udp_checksum)
-
-    # monta o pacote de acordo com o rfc2544
-
-    packet = ip_header + udp_header + udp_data
-    #print_binary(packet)
-    return packet
-
-
 def is_valid_ip(s):
     pieces = s.split('.')
     if len(pieces) != 4:
@@ -175,9 +45,8 @@ def get_local_ip():
 
 def get_socket():
     try:
-        return socket.socket(socket.AF_INET,
-                             socket.SOCK_RAW,
-                             socket.IPPROTO_RAW)
+        return socket.socket(socket.AF_INET, # Internet
+                     socket.SOCK_DGRAM) # UDP
     except socket.error as msg:
         print('Socket could not be created. Error Code : ' +
               str(msg[0]) + ' Message ' + msg[1])
@@ -188,7 +57,10 @@ def socket_send(src_ip, dst_ip, length, num_pkt_sent, num_pkt_recv):
     MAX_TIME = 60
 
     sock = get_socket()
-    packet = build_packet(src_ip, dst_ip, length)
+    packet = '!'.encode('ascii')
+    packet += ("*" * (length - 44)).encode('ascii')
+    packet += '!'.encode('ascii')
+    sock.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, 10);
     packet_rate = 1  # packets per second
     highest_lossless_rate = -1
     highest_loss_rate = -1
@@ -205,8 +77,9 @@ def socket_send(src_ip, dst_ip, length, num_pkt_sent, num_pkt_recv):
         """
         while time_counter < MAX_TIME:
             print("Sending packet to: {}".format(dst_ip))
+            print(packet)
             # endereço e porta ja informado no pacote
-            sock.sendto(packet, ('', 0))
+            sock.sendto(packet, (dst_ip, 7))
             with num_pkt_sent.get_lock():
                 num_pkt_sent.value += 1
             time.sleep(period)
@@ -308,8 +181,6 @@ if __name__ == "__main__":
     # Shared memory variables
     num_pkt_sent = multiprocessing.Value('d', 0)
     num_pkt_recv = multiprocessing.Value('d', 0)
-
-    src_ip, dst_ip == '127.0.0.1', '127.0.0.1'
 
     send_p = multiprocessing.Process(target=socket_send,
                                      args=(src_ip, dst_ip, packet_sz,
