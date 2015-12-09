@@ -39,7 +39,7 @@ def checksum(msg):
     return s
 
 
-def build_packet(src_ip, dst_ip):
+def build_packet(src_ip, dst_ip, length):
 
     # pacote deve ter esse formato de acordo com a rfc2544
     """
@@ -121,7 +121,12 @@ def build_packet(src_ip, dst_ip):
     udp_header = struct.pack("!HHHH", udp_src_port, udp_dest_port,
                              udp_msg_length, udp_checksum)
 
-    udp_data = "hello".encode('ascii')
+    """
+    Send LENGHT - 46 (46 == ethernet (14) + ip (20) + udp headers (8)) bytes
+    """
+    udp_data = '!'.encode('ascii')
+    udp_data += ("*" * (length - 44)).encode('ascii')
+    udp_data += '!'.encode('ascii')
 
     src_addr = socket.inet_aton(src_ip)
     dest_addr = socket.inet_aton(dst_ip)
@@ -141,7 +146,7 @@ def build_packet(src_ip, dst_ip):
     # monta o pacote de acordo com o rfc2544
 
     packet = ip_header + udp_header + udp_data
-    print_binary(packet)
+    #print_binary(packet)
     return packet
 
 
@@ -178,20 +183,18 @@ def get_socket():
               str(msg[0]) + ' Message ' + msg[1])
         sys.exit()
 
-PACKET_SIZES = [64, 128, 256, 512, 1024, 1280, 1518]
 
-
-def socket_send(src_ip, dst_ip, num_pkt_sent, num_pkt_recv):
-    MAX_TIME = 2
+def socket_send(src_ip, dst_ip, length, num_pkt_sent, num_pkt_recv):
+    MAX_TIME = 60
 
     sock = get_socket()
-    packet = build_packet(src_ip, dst_ip)
-    packet_rate = 1 # packets per second
+    packet = build_packet(src_ip, dst_ip, length)
+    packet_rate = 1  # packets per second
     highest_lossless_rate = -1
     highest_loss_rate = -1
 
     while True:
-        period = 1/packet_rate
+        period = 1 / packet_rate
         time_counter = 0.0
         with num_pkt_sent.get_lock():
             num_pkt_sent.value = 0
@@ -201,7 +204,7 @@ def socket_send(src_ip, dst_ip, num_pkt_sent, num_pkt_recv):
         em MAXX_TIME
         """
         while time_counter < MAX_TIME:
-            print("Sending packet1 to: %s" % dst_ip)
+            print("Sending packet to: {}".format(dst_ip))
             sock.sendto(packet, (dst_ip, 0))
             with num_pkt_sent.get_lock():
                 num_pkt_sent.value += 1
@@ -213,7 +216,7 @@ def socket_send(src_ip, dst_ip, num_pkt_sent, num_pkt_recv):
         thread terminar de receber os pacotes
         """
         print("Terminating send process")
-        time.sleep(1)
+        time.sleep(10)
 
         """
         Se o numero de pacotes enviados for iguais aos recebidos reduz a taxa
@@ -259,7 +262,7 @@ def socket_send(src_ip, dst_ip, num_pkt_sent, num_pkt_recv):
                 print("Highest rate found: {} pps".format(packet_rate))
                 break
             highest_lossless_rate = packet_rate
-            if 0 < highest_loss_rate <= packet*2:
+            if 0 < highest_loss_rate <= packet * 2:
                 packet_rate = (highest_loss_rate + packet_rate) / 2
             else:
                 packet_rate *= 2
@@ -270,12 +273,14 @@ def socket_send(src_ip, dst_ip, num_pkt_sent, num_pkt_recv):
 
 def socket_recv(src_ip, dst_ip, packet_sz, num_pkt_recv):
     sock = get_socket()
+    sock.bind((src_ip, 7))
 
     while True:
         sz, addr = sock.recvfrom(packet_sz)
         print('Packet received from %s' % addr)
         num_pkt_recv.value += 1
 
+PACKET_SIZES = [64, 128, 256, 512, 1024, 1280, 1518]
 if __name__ == "__main__":
 
     if len(sys.argv) < 3:
@@ -289,7 +294,7 @@ if __name__ == "__main__":
 
     packet_sz = int(sys.argv[2])
     if packet_sz not in PACKET_SIZES:
-        print('{} is not a valid packet size. Packet must have on of the '
+        print('{} is not a valid packet size.\nPacket must have on of the '
               'follow sizes: {}.'.format(packet_sz, PACKET_SIZES))
         sys.exit()
 
@@ -303,18 +308,16 @@ if __name__ == "__main__":
     num_pkt_sent = multiprocessing.Value('d', 0)
     num_pkt_recv = multiprocessing.Value('d', 0)
 
+    src_ip, dst_ip == '127.0.0.1', '127.0.0.1'
+
     send_p = multiprocessing.Process(target=socket_send,
-                                     args=(src_ip, dst_ip, num_pkt_sent,
-                                           num_pkt_recv))
+                                     args=(src_ip, dst_ip, packet_sz,
+                                           num_pkt_sent, num_pkt_recv))
     recv_p = multiprocessing.Process(target=socket_recv,
                                      args=(src_ip, dst_ip, packet_sz,
                                            num_pkt_recv))
 
     recv_p.start()
     send_p.start()
-    print("joining send_p")
     send_p.join()
-    print("joining recv_p")
     recv_p.join()
-    print("Ending program")
-    #sock.sendto(packet, (dst_ip, 0))
