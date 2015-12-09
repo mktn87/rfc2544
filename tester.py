@@ -195,6 +195,11 @@ def socket_send(src_ip, dst_ip, num_pkt_sent, num_pkt_recv):
         time_counter = 0.0
         with num_pkt_sent.get_lock():
             num_pkt_sent.value = 0
+
+        """
+        o loop executa aproximadamente pelo tempo (em segundos) definido
+        em MAXX_TIME
+        """
         while time_counter < MAX_TIME:
             print("Sending packet1 to: %s" % dst_ip)
             sock.sendto(packet, (dst_ip, 0))
@@ -202,8 +207,43 @@ def socket_send(src_ip, dst_ip, num_pkt_sent, num_pkt_recv):
                 num_pkt_sent.value += 1
             time.sleep(period)
             time_counter += period
+
+        """
+        Para de enviar mensagens e espera um momento (sleep) para a outra
+        thread terminar de receber os pacotes
+        """
         print("Terminating send process")
-        time.sleep(1) # espera os outros pacotes chegarem
+        time.sleep(1)
+
+        """
+        Se o numero de pacotes enviados for iguais aos recebidos reduz a taxa
+        para:
+                TAXA ATUAL
+            +   MAIOR TAXA ENCONTRADA SEM PERDAS ATEH AGORA
+            /   2
+            (ou seja, média entre as duas taxas)
+
+        Caso contrario, a taxa é aumentada para:
+
+                TAXA ATUAL
+            *   2
+
+        A menos que a MAIOR TAXA ENCONTRADA COM PERDAS ATEH AGORA seja menor
+        que 2x TAXA ATUAL. Nesse caso a nova taxa se torna:
+
+                TAXA ATUAL
+            +   MAIOR TAXA ENCONTRADA COM PERDAS ATEH AGORA
+            /   2
+            (ou seja, média entre as duas taxas)
+
+        Se a TAXA ATUAL == MAIOR TAXA ENCONTRADA SEM PERDAS, então a taxa atual
+        servirá para o calculo de throughput e o processo é terminado.
+
+        Se a MAIOR TAXA ENCONTRADA SEM PERDAS < 0, no momento de fazer a
+        redução da taxa, então o processo nunca irá encontrar uma taxa melhor
+        do que esta e o programa acaba.
+
+        """
         if num_pkt_sent.value > num_pkt_recv.value:
             if packet_rate > highest_loss_rate:
                 highest_loss_rate = packet_rate
