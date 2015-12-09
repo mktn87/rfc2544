@@ -205,7 +205,8 @@ def socket_send(src_ip, dst_ip, length, num_pkt_sent, num_pkt_recv):
         """
         while time_counter < MAX_TIME:
             print("Sending packet to: {}".format(dst_ip))
-            sock.sendto(packet, (dst_ip, 0))
+            # endereço e porta ja informado no pacote
+            sock.sendto(packet, ('', 0))
             with num_pkt_sent.get_lock():
                 num_pkt_sent.value += 1
             time.sleep(period)
