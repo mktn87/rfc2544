@@ -6,6 +6,7 @@ import struct
 import time
 import multiprocessing
 
+PORT = 5050
 
 def print_binary(header):
     i = 0
@@ -42,6 +43,18 @@ def get_local_ip():
         s.close()
     return IP
 
+def get_local_port():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # doesn't even have to be reachable
+        s.connect(('1.0.0.0', 0))
+        IP = s.getsockname()[1]
+    except:
+        IP = 0
+    finally:
+        s.close()
+    return IP
+
 
 def get_socket():
     try:
@@ -53,44 +66,55 @@ def get_socket():
         sys.exit()
 
 
-def socket_send(src_ip, dst_ip, length, num_pkt_sent, num_pkt_recv):
-    MAX_TIME = 60
+def socket_send(src_ip, dst_ip, length):
+    MAX_FRAME_RATE = MAX_FRAME_RATES[PACKET_SIZES.index(length)]
+    #MAX_PACKETS = MAX_FRAME_RATE*20
+
 
     sock = get_socket()
+    sock.bind((src_ip, PORT))
     packet = '!'.encode('ascii')
     packet += ("*" * (length - 44)).encode('ascii')
     packet += '!'.encode('ascii')
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, 10);
-    packet_rate = 1  # packets per second
+    packet_rate = MAX_FRAME_RATE  # packets per second
     highest_lossless_rate = -1
-    highest_loss_rate = -1
+    highest_loss_rate = 0
 
     while True:
         period = 1 / packet_rate
-        time_counter = 0.0
-        with num_pkt_sent.get_lock():
-            num_pkt_sent.value = 0
+        print(period)
+        num_pkt_sent = 0
+        MAX_PACKETS = packet_rate*20
 
         """
         o loop executa aproximadamente pelo tempo (em segundos) definido
         em MAXX_TIME
         """
-        while time_counter < MAX_TIME:
-            print("Sending packet to: {}".format(dst_ip))
-            print(packet)
-            # endereço e porta ja informado no pacote
+        while num_pkt_sent < MAX_PACKETS:
+            #print("Sending packet to: {}".format(dst_ip))
+            #print(packet)
             sock.sendto(packet, (dst_ip, 7))
-            with num_pkt_sent.get_lock():
-                num_pkt_sent.value += 1
+            num_pkt_sent += 1
             time.sleep(period)
-            time_counter += period
 
         """
         Para de enviar mensagens e espera um momento (sleep) para a outra
         thread terminar de receber os pacotes
         """
-        print("Terminating send process")
-        time.sleep(10)
+        print("\n{} pacotes enviados.".format(num_pkt_sent))
+        time.sleep(1)
+        """
+        Envia três mensagens END para o servidor saber que deve parar de
+        receber os dados.
+        """
+        end_message = "END".encode('ascii')
+        sock.sendto(end_message, (dst_ip, 7))
+        print("blocking")
+        num_pkt_recv, addr = sock.recvfrom(1024)
+        num_pkt_recv = int(num_pkt_recv)
+        print("Received {} from {}".format(num_pkt_recv, addr))
+        print("received")
 
         """
         Se o numero de pacotes enviados for iguais aos recebidos reduz a taxa
@@ -121,40 +145,51 @@ def socket_send(src_ip, dst_ip, length, num_pkt_sent, num_pkt_recv):
         do que esta e o programa acaba.
 
         """
-        if num_pkt_sent.value > num_pkt_recv.value:
-            if packet_rate > highest_loss_rate:
-                highest_loss_rate = packet_rate
-            if highest_lossless_rate < 0:
-                print("Throughput < 1 pps")
+        print()
+        print('highest_loss_rate: {}, highest_lossless_rate: {}'.format(
+            highest_loss_rate, highest_lossless_rate))
+        print(num_pkt_recv, num_pkt_recv)
+        if num_pkt_sent > num_pkt_recv:
+            #if packet_rate > highest_loss_rate:
+            highest_loss_rate = packet_rate
+            packet_rate //= 2
+            if packet_rate <= 1:
                 break
-            packet_rate = (highest_lossless_rate + packet_rate) / 2
+
+            # if highest_lossless_rate < 0:
+            #     print("Throughput < 1 pps")
+            #     break
+            #packet_rate = (highest_lossless_rate + packet_rate) // 2
             print('num_pkt_sent ({}) > num_pkt_recv ({})'.format(
-                  num_pkt_sent.value, num_pkt_recv.value))
+                  num_pkt_sent, num_pkt_recv))
             print('Reducing rate to {} pps'.format(packet_rate))
         else:
-            if packet_rate == highest_lossless_rate:
-                print("Highest rate found: {} pps".format(packet_rate))
-                break
-            highest_lossless_rate = packet_rate
-            if 0 < highest_loss_rate <= packet * 2:
-                packet_rate = (highest_loss_rate + packet_rate) / 2
-            else:
-                packet_rate *= 2
+            s = abs(packet_rate - highest_loss_rate) // 2
+            packet_rate += s
+            #packet_rate = (packet_rate * 3) // 2
+
             print('num_pkt_sent ({}) <= num_pkt_recv ({})'.format(
-                  num_pkt_sent.value, num_pkt_recv.value))
+                  num_pkt_sent, num_pkt_recv))
             print('Increasing rate to {} pps'.format(packet_rate))
 
+            if packet_rate < 2 or s == 0:
+            #if packet_rate < 2 or packet_rate == highest_loss_rate:
+                print('\npacket_rate == {}'.format(packet_rate))
+                print('s == {}'.format(s))
+                break
+            # if packet_rate == highest_lossless_rate:
+            #     print("Highest rate found: {} pps".format(packet_rate))
+            #     break
+            # highest_lossless_rate = packet_rate
+            # if 0 < highest_loss_rate <= packet_rate * 2:
+            #    packet_rate = (highest_loss_rate + packet_rate) // 2
+            # else:
+            #     packet_rate *= 2
 
-def socket_recv(src_ip, dst_ip, packet_sz, num_pkt_recv):
-    sock = get_socket()
-    sock.bind((src_ip, 7))
+    print("Highest rate found: {} pps".format(packet_rate))
 
-    while True:
-        sz, addr = sock.recvfrom(packet_sz)
-        print('Packet received from %s' % addr)
-        num_pkt_recv.value += 1
-
-PACKET_SIZES = [64, 128, 256, 512, 1024, 1280, 1518]
+PACKET_SIZES = [64, 128, 256, 512, 1024, 1280, 1280, 1518]
+MAX_FRAME_RATES = [14880, 8445, 4528, 2349, 1586, 1197, 961, 812]
 if __name__ == "__main__":
 
     if len(sys.argv) < 3:
@@ -178,18 +213,4 @@ if __name__ == "__main__":
     print('dst ip is %s' % dst_ip)
     print('packet size is %d' % packet_sz)
 
-    # Shared memory variables
-    num_pkt_sent = multiprocessing.Value('d', 0)
-    num_pkt_recv = multiprocessing.Value('d', 0)
-
-    send_p = multiprocessing.Process(target=socket_send,
-                                     args=(src_ip, dst_ip, packet_sz,
-                                           num_pkt_sent, num_pkt_recv))
-    recv_p = multiprocessing.Process(target=socket_recv,
-                                     args=(src_ip, dst_ip, packet_sz,
-                                           num_pkt_recv))
-
-    recv_p.start()
-    send_p.start()
-    send_p.join()
-    recv_p.join()
+    socket_send(src_ip, dst_ip, packet_sz)

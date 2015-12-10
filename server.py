@@ -1,12 +1,31 @@
 import socket
 
-UDP_IP = "192.168.1.14"
-UDP_PORT = 7
+def get_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # doesn't even have to be reachable
+        s.connect(('1.0.0.0', 0))
+        IP = s.getsockname()[0]
+    except:
+        IP = '127.0.0.1'
+    finally:
+        s.close()
+    return IP
 
-sock = socket.socket(socket.AF_INET, # Internet
-                     socket.SOCK_DGRAM) # UDP
-sock.bind((UDP_IP, UDP_PORT))
+LOCAL_PORT = 7
+LOCAL_IP = get_local_ip()
+DEST_PORT = 5050
 
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.bind((LOCAL_IP, LOCAL_PORT))
+
+packet_counter = 0
 while True:
-    data, addr = sock.recvfrom(1024) # buffer size is 1024 bytes
-    print("received message:", data)
+    data, (ip, port) = sock.recvfrom(2048)
+    if data != 'END':
+        packet_counter += 1
+    else:
+        sock.sendto(str(packet_counter), (ip, DEST_PORT))
+        packet_counter = 0
+
+
