@@ -79,7 +79,7 @@ def socket_send(src_ip, dst_ip, length):
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, 10);
     packet_rate = MAX_FRAME_RATE  # packets per second
     highest_lossless_rate = -1
-    highest_loss_rate = 0
+    lowest_loss_rate = -1
 
     while True:
         period = 1 / packet_rate
@@ -146,43 +146,68 @@ def socket_send(src_ip, dst_ip, length):
 
         """
         print()
-        print('highest_loss_rate: {}, highest_lossless_rate: {}'.format(
-            highest_loss_rate, highest_lossless_rate))
+        print('lowest_loss_rate: {}, highest_lossless_rate: {}'.format(
+            lowest_loss_rate, highest_lossless_rate))
         print(num_pkt_recv, num_pkt_recv)
         if num_pkt_sent > num_pkt_recv:
-            #if packet_rate > highest_loss_rate:
-            highest_loss_rate = packet_rate
-            packet_rate //= 2
-            if packet_rate <= 1:
-                break
-
-            # if highest_lossless_rate < 0:
-            #     print("Throughput < 1 pps")
+            #if packet_rate > lowest_loss_rate:
+            # lowest_loss_rate = packet_rate
+            # packet_rate //= 2
+            # if packet_rate <= 1:
             #     break
-            #packet_rate = (highest_lossless_rate + packet_rate) // 2
+
+            # # if highest_lossless_rate < 0:
+            # #     print("Throughput < 1 pps")
+            # #     break
+            # #packet_rate = (highest_lossless_rate + packet_rate) // 2
+            # print('num_pkt_sent ({}) > num_pkt_recv ({})'.format(
+            #       num_pkt_sent, num_pkt_recv))
+            # print('Reducing rate to {} pps'.format(packet_rate))
+
+            if packet_rate < lowest_loss_rate or lowest_loss_rate == -1:
+                lowest_loss_rate = packet_rate
+            if highest_lossless_rate < 0:
+                print("Throughput < 1 pps")
+                break
+            packet_rate = (highest_lossless_rate + packet_rate) // 2
             print('num_pkt_sent ({}) > num_pkt_recv ({})'.format(
                   num_pkt_sent, num_pkt_recv))
             print('Reducing rate to {} pps'.format(packet_rate))
         else:
-            s = abs(packet_rate - highest_loss_rate) // 2
-            packet_rate += s
-            #packet_rate = (packet_rate * 3) // 2
+            # s = abs(packet_rate - lowest_loss_rate) // 2
+            # packet_rate += s
+            # #packet_rate = (packet_rate * 3) // 2
 
+            # print('num_pkt_sent ({}) <= num_pkt_recv ({})'.format(
+            #       num_pkt_sent, num_pkt_recv))
+            # print('Increasing rate to {} pps'.format(packet_rate))
+
+            # if packet_rate < 2 or s == 0:
+            # #if packet_rate < 2 or packet_rate == lowest_loss_rate:
+            #     print('\npacket_rate == {}'.format(packet_rate))
+            #     print('s == {}'.format(s))
+            #     break
+            if packet_rate == highest_lossless_rate:
+                #print("Highest rate found: {} pps".format(packet_rate))
+                break
+            if packet_rate > highest_lossless_rate:
+                highest_lossless_rate = packet_rate
+            if 0 < lowest_loss_rate:
+                packet_rate = (lowest_loss_rate + packet_rate) // 2
+            else:
+                packet_rate *= 2
             print('num_pkt_sent ({}) <= num_pkt_recv ({})'.format(
                   num_pkt_sent, num_pkt_recv))
             print('Increasing rate to {} pps'.format(packet_rate))
 
-            if packet_rate < 2 or s == 0:
-            #if packet_rate < 2 or packet_rate == highest_loss_rate:
-                print('\npacket_rate == {}'.format(packet_rate))
-                print('s == {}'.format(s))
-                break
+
+
             # if packet_rate == highest_lossless_rate:
             #     print("Highest rate found: {} pps".format(packet_rate))
             #     break
             # highest_lossless_rate = packet_rate
-            # if 0 < highest_loss_rate <= packet_rate * 2:
-            #    packet_rate = (highest_loss_rate + packet_rate) // 2
+            # if 0 < lowest_loss_rate <= packet_rate * 2:
+            #    packet_rate = (lowest_loss_rate + packet_rate) // 2
             # else:
             #     packet_rate *= 2
 
