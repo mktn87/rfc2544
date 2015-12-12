@@ -17,14 +17,10 @@ def start_latency_test(sock):
     while True:
         data, (ip, port) = sock.recvfrom(2048)
         data = str(data)[2:-1]
-        print(data)
         if data == 'END_LATENCY_TRY':
             timestamp_1, (ip, port) = sock.recvfrom(2048)
             timestamp_1 = float(timestamp_1)
-            print(timestamp_1)
             timestamp_2 = time.time()
-            print(str(timestamp_2 - timestamp_1).encode('ascii'))
-            print(ip,port)
             sock.sendto(str(timestamp_2 - timestamp_1).encode('ascii'),
                         (ip, port))
             print(timestamp_2-timestamp_1)
@@ -67,7 +63,6 @@ if __name__ == '__main__':
     while True:
         data, (ip, port) = sock.recvfrom(2048)
         data = str(data)[2:-1]
-        print(data, ip, port)
         if data == 'END_THROUGHPUT_TRY':
             x = sock.sendto(str(packet_counter).encode('ascii'), (ip, port))
             print('message sent: {}'.format(x))
