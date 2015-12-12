@@ -2,9 +2,10 @@
 
 import sys
 import socket
-import struct
 import time
-import multiprocessing
+
+DEFAULT_SRC_PORT = 5050
+N = 4
 
 
 def print_binary(header):
@@ -21,135 +22,6 @@ def print_binary(header):
     print()
 
 
-def checksum(msg):
-    s = 0
-
-    for i in range(0, len(msg), 2):
-        if i + 1 < len(msg):
-            w = msg[i] + (msg[i + 1] << 8)
-        else:
-            w = msg[i]
-        s += w
-
-    s = (s >> 16) + (s & 0xffff)
-    s += (s >> 16)
-
-    s = ~s & 0xffff
-
-    return s
-
-
-def build_packet(src_ip, dst_ip, length):
-
-    # pacote deve ter esse formato de acordo com a rfc2544
-    """
-    UDP echo request on Ethernet
-
-           -- DATAGRAM HEADER
-           offset data (hex)            description
-           00     xx xx xx xx xx xx     set to dest MAC address
-           06     xx xx xx xx xx xx     set to source MAC address
-           12     08 00                 type
-
-           -- IP HEADER
-           14     45                    IP version - 4 header length 5 4
-          byte units
-           15     00                    TOS
-           16     00 2E                 total length*
-           18     00 00                 ID
-           20     00 00                 flags (3 bits) - 0 fragment
-          offset-0
-           22     0A                    TTL
-           23     11                    protocol - 17 (UDP)
-           24     C4 8D                 header checksum*
-           26     xx xx xx xx           set to source IP address**
-           30     xx xx xx xx           set to destination IP address**
-
-           -- UDP HEADER
-           34     C0 20                 source port
-           36     00 07                 destination port 07 = Echo
-           38     00 1A                 UDP message length*
-           40     00 00                 UDP checksum
-
-           -- UDP DATA
-           42     00 01 02 03 04 05 06 07    some data***
-           50     08 09 0A 0B 0C 0D 0E 0F
-
-          * - change for different length frames
-
-          ** - change for different logical streams
-
-          *** - fill remainder of frame with incrementing octets,
-          repeated if required by frame length
-
-    Values to be used in Total Length and UDP message length fields
-    """
-
-    # ip header
-    ip_version = 0x45         # 1 byte, version + ihl
-    ip_tos = 0x00             # 1 byte, dscp+ecn
-    ip_total_length = 0x0000  # 2 bytes, kernel will calculate
-    ip_id = 0x0000            # 2 bytes
-    ip_frag_offset = 0x0000   # 2 bytes, flags + fragment offset
-    ip_ttl = 0x0a             # 1 byte
-    ip_protocol = socket.IPPROTO_UDP  # 1 byte
-    ip_checksum = 0x0000      # 2 bytes, kernel will calculate
-    # 4 bytes, converte string pra bytes
-    ip_src_addr = socket.inet_aton(src_ip)
-    # 4 bytes, converte string pra bytes
-    ip_dest_addr = socket.inet_aton(dst_ip)
-
-    """
-    ! = network order (big-endian)
-    B = unsigned byte -> [0, 255]
-    H = unsigned word -> [0,65535]
-    4s = char[4] -> [0, 255]x4
-    """
-    ip_header = struct.pack('!BBHHHBBH4s4s', ip_version, ip_tos,
-                            ip_total_length, ip_id, ip_frag_offset, ip_ttl,
-                            ip_protocol, ip_checksum, ip_src_addr,
-                            ip_dest_addr)
-
-    # udp header
-    udp_src_port = 0xc020   # 2 bytes
-    udp_dest_port = 0x0007  # 2 bytes
-    udp_msg_length = 0      # 2 bytes
-    udp_checksum = 0        # 2 bytes
-
-    # ! network order (big-endian)
-    # H = unsigned word -> [0,65535]
-    udp_header = struct.pack("!HHHH", udp_src_port, udp_dest_port,
-                             udp_msg_length, udp_checksum)
-
-    """
-    Send LENGHT - 46 (46 == ethernet (14) + ip (20) + udp headers (8)) bytes
-    """
-    udp_data = '!'.encode('ascii')
-    udp_data += ("*" * (length - 44)).encode('ascii')
-    udp_data += '!'.encode('ascii')
-
-    src_addr = socket.inet_aton(src_ip)
-    dest_addr = socket.inet_aton(dst_ip)
-    placeholder = 0
-    protocol = socket.IPPROTO_UDP
-    udp_length = len(udp_header) + len(udp_data)
-
-    # header pra calcular o checksum do udp
-    pseudo_header = struct.pack('!4s4sBBH', src_addr, dest_addr, placeholder,
-                                protocol, udp_length)
-    pseudo_header += udp_header + udp_data
-
-    udp_checksum = checksum(pseudo_header)
-    udp_header = struct.pack('!HHHH', udp_src_port, udp_dest_port, udp_length,
-                             udp_checksum)
-
-    # monta o pacote de acordo com o rfc2544
-
-    packet = ip_header + udp_header + udp_data
-    #print_binary(packet)
-    return packet
-
-
 def is_valid_ip(s):
     pieces = s.split('.')
     if len(pieces) != 4:
@@ -160,165 +32,201 @@ def is_valid_ip(s):
         return False
 
 
-def get_local_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        # doesn't even have to be reachable
-        s.connect(('1.0.0.0', 0))
-        IP = s.getsockname()[0]
-    except:
-        IP = '127.0.0.1'
-    finally:
-        s.close()
-    return IP
-
-
 def get_socket():
     try:
-        return socket.socket(socket.AF_INET,
-                             socket.SOCK_RAW,
-                             socket.IPPROTO_RAW)
+        return socket.socket(socket.AF_INET,  # Internet
+                             socket.SOCK_DGRAM)  # UDP
     except socket.error as msg:
         print('Socket could not be created. Error Code : ' +
               str(msg[0]) + ' Message ' + msg[1])
         sys.exit()
 
 
-def socket_send(src_ip, dst_ip, length, num_pkt_sent, num_pkt_recv):
-    MAX_TIME = 60
+def socket_send(src_ip, dst_ip, src_port, length):
+    MAX_FRAME_RATE = MAX_FRAME_RATES[PACKET_SIZES.index(length)]
 
     sock = get_socket()
-    packet = build_packet(src_ip, dst_ip, length)
-    packet_rate = 1  # packets per second
-    highest_lossless_rate = -1
-    highest_loss_rate = -1
+    sock.bind((src_ip, src_port))
+    sock.connect((dst_ip, 7))
+    sock.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, 10)
+
+    packet = ('!' + "*" * (length - 44) + '!').encode('ascii')
+
+    packet_rate = MAX_FRAME_RATE  # packets per second
+
+    highest_lossless_rate = 0
+    lowest_loss_rate = 0
+
+    no_drops_detected = True
+
+    MAX_TIME = 2
 
     while True:
-        period = 1 / packet_rate
-        time_counter = 0.0
-        with num_pkt_sent.get_lock():
-            num_pkt_sent.value = 0
+        period = N / packet_rate
+        num_pkt_sent = 0
+        MAX_PACKETS = packet_rate * MAX_TIME
 
-        """
-        o loop executa aproximadamente pelo tempo (em segundos) definido
-        em MAXX_TIME
-        """
-        while time_counter < MAX_TIME:
-            print("Sending packet to: {}".format(dst_ip))
-            # endereço e porta ja informado no pacote
-            sock.sendto(packet, ('', 0))
-            with num_pkt_sent.get_lock():
-                num_pkt_sent.value += 1
+        print("rate is {}".format(packet_rate))
+        print('period is {}'.format(period))
+
+        f.write('Rate = {}\n'.format(packet_rate))
+
+        start = time.time()
+
+        while num_pkt_sent < MAX_PACKETS:
+            for _ in range(N):
+                sock.sendall(packet)
+                num_pkt_sent += 1
             time.sleep(period)
-            time_counter += period
+
+        end = time.time()
+        total_time = end - start
+        print("time = {}".format(total_time))
 
         """
         Para de enviar mensagens e espera um momento (sleep) para a outra
         thread terminar de receber os pacotes
         """
-        print("Terminating send process")
-        time.sleep(10)
-
+        print("\n{} pacotes enviados.".format(num_pkt_sent))
+        time.sleep(5)
         """
-        Se o numero de pacotes enviados for iguais aos recebidos reduz a taxa
-        para:
-                TAXA ATUAL
-            +   MAIOR TAXA ENCONTRADA SEM PERDAS ATEH AGORA
-            /   2
-            (ou seja, média entre as duas taxas)
-
-        Caso contrario, a taxa é aumentada para:
-
-                TAXA ATUAL
-            *   2
-
-        A menos que a MAIOR TAXA ENCONTRADA COM PERDAS ATEH AGORA seja menor
-        que 2x TAXA ATUAL. Nesse caso a nova taxa se torna:
-
-                TAXA ATUAL
-            +   MAIOR TAXA ENCONTRADA COM PERDAS ATEH AGORA
-            /   2
-            (ou seja, média entre as duas taxas)
-
-        Se a TAXA ATUAL == MAIOR TAXA ENCONTRADA SEM PERDAS, então a taxa atual
-        servirá para o calculo de throughput e o processo é terminado.
-
-        Se a MAIOR TAXA ENCONTRADA SEM PERDAS < 0, no momento de fazer a
-        redução da taxa, então o processo nunca irá encontrar uma taxa melhor
-        do que esta e o programa acaba.
-
+        Envia três mensagens END para o servidor saber que deve parar de
+        receber os dados.
         """
-        if num_pkt_sent.value > num_pkt_recv.value:
-            if packet_rate > highest_loss_rate:
-                highest_loss_rate = packet_rate
-            if highest_lossless_rate < 0:
-                print("Throughput < 1 pps")
-                break
-            packet_rate = (highest_lossless_rate + packet_rate) / 2
-            print('num_pkt_sent ({}) > num_pkt_recv ({})'.format(
-                  num_pkt_sent.value, num_pkt_recv.value))
-            print('Reducing rate to {} pps'.format(packet_rate))
-        else:
+        end_message = "END_THROUGHPUT_TRY".encode('ascii')
+        sock.send(end_message)
+        print("Waiting for response...")
+        num_pkt_recv, addr = sock.recvfrom(1024)
+        num_pkt_recv = int(num_pkt_recv)
+        print("Received {} from {}".format(num_pkt_recv, addr))
+
+        # Se houve perdas, ou tempo superou tempo máximo em 15%
+        if num_pkt_sent > num_pkt_recv or \
+                abs(total_time - MAX_TIME) / MAX_TIME > 0.15:
+
+            # Define o novo patamar mais baixo para a taxa que gerou perdas
+            if packet_rate < lowest_loss_rate or no_drops_detected:
+                lowest_loss_rate = packet_rate
+                no_drops_detected = False
+
+            # Reduz a taxa para o valor médio entre a taxa atual e a maior taxa
+            # que não gerou perdas
+            packet_rate = (highest_lossless_rate + packet_rate) // 2
+            print('\tnum_pkt_sent ({}) > num_pkt_recv ({})'.format(
+                  num_pkt_sent, num_pkt_recv))
+            print('\tReducing rate to {} pps'.format(packet_rate))
+            f.write('\tSent: {}, Received: {}\n'.format(
+                num_pkt_sent, num_pkt_recv))
+            f.write('\tReducing rate to {} pps\n'.format(packet_rate))
+
+        # Se não houve perdas
+        elif num_pkt_sent <= num_pkt_recv:
+            # Significa que o programa encontrou esta taxa pela segunda vez.
+            # Então o programa termina.
             if packet_rate == highest_lossless_rate:
-                print("Highest rate found: {} pps".format(packet_rate))
                 break
-            highest_lossless_rate = packet_rate
-            if 0 < highest_loss_rate <= packet * 2:
-                packet_rate = (highest_loss_rate + packet_rate) / 2
-            else:
+
+            # Define o novo patamar inferion para taxa sem perda
+            if packet_rate > highest_lossless_rate:
+                highest_lossless_rate = packet_rate
+
+            if no_drops_detected:
                 packet_rate *= 2
-            print('num_pkt_sent ({}) <= num_pkt_recv ({})'.format(
-                  num_pkt_sent.value, num_pkt_recv.value))
-            print('Increasing rate to {} pps'.format(packet_rate))
+            else:
+                packet_rate = (lowest_loss_rate + packet_rate) // 2
+
+            print('\tnum_pkt_sent ({}) <= num_pkt_recv ({})'.format(
+                  num_pkt_sent, num_pkt_recv))
+            print('\tIncreasing rate to {} pps'.format(packet_rate))
+            f.write('\tSent: {}, Received: {}\n'.format(
+                num_pkt_sent, num_pkt_recv))
+            f.write('\tIncreasing rate to {} pps\n'.format(packet_rate))
+
+        print('\tlowest_loss_rate: {}, highest_lossless_rate: {}'.format(
+            lowest_loss_rate, highest_lossless_rate))
+        print('\ttotal MB = {}'.format(
+            num_pkt_sent * total_time * length // 1024 // 1024))
+        print()
+        f.write('\tlowest_loss_rate: {}, highest_lossless_rate: {}\n'.format(
+            lowest_loss_rate, highest_lossless_rate))
+        f.write('\ttotal MB = {}\n'.format(
+            num_pkt_sent * total_time * length // 1024 // 1024))
+        f.write('\n')
+
+    print("Highest rate found: {} pps".format(packet_rate))
+    f.write("Throughput: {} pps\n".format(packet_rate))
+    f.write('\n')
+    start_latency_test(sock, packet_rate, length)
 
 
-def socket_recv(src_ip, dst_ip, packet_sz, num_pkt_recv):
-    sock = get_socket()
-    sock.bind((src_ip, 7))
+def start_latency_test(sock, throughput, length):
+    MAX_PACKETS = throughput * 60
+    num_pkt_sent = 0
+    f.write('\n\nStarting Latency Test\n\n')
+    sock.send('BEGIN_LATENCY_TEST'.encode('ascii'))
+    total = 0
+    packet = ('!' + "*" * (length - 44) + '!').encode('ascii')
+    period = N / throughput
+    for i in range(20):
+        print('Starting iteration {}'.format(i))
+        for _ in range(2):
+            while num_pkt_sent < MAX_PACKETS:
+                for _ in range(N):
+                    sock.sendall(packet)
+                    num_pkt_sent += 1
+                time.sleep(period)
+            sock.send('END_LATENCY_TRY'.encode('ascii'))
+            timestamp = time.time()
+            sock.send(str(timestamp).encode('ascii'))
+            latency, addr = sock.recvfrom(1024)
+            latency = float(latency)
+            print('Latency_{} = {}'.format(i, latency))
+            total += latency
+        total /= 2
+        print('Mean latency_{} = {}'.format(i, latency))
+        f.write('Mean latency_{} = {}\n'.format(i, latency))
+    sock.send('END_LATENCY_TEST'.encode('ascii'))
+    print('Final latency = {}'.format(total / 20))
+    f.write('Final latency = {}\n'.format(total / 20))
 
-    while True:
-        sz, addr = sock.recvfrom(packet_sz)
-        print('Packet received from %s' % addr)
-        num_pkt_recv.value += 1
 
-PACKET_SIZES = [64, 128, 256, 512, 1024, 1280, 1518]
+PACKET_SIZES = [64,    128,  256,  512,  1024, 1280, 1280, 1518]
+MAX_FRAME_RATES = [14880, 8445, 4528, 2349, 1586, 1197, 961,  812]
 if __name__ == "__main__":
 
-    if len(sys.argv) < 3:
-        print('usage: python3 %s <DESTINATION_IP> <PACKET_SIZE>' % sys.argv[0])
+    if len(sys.argv) not in (4, 5):
+        print('usage: python3 %s <SOURCE_IP> <DESTINATION_IP> <PACKET_SIZE>'
+              '[<PORT>]' % sys.argv[0])
         sys.exit()
 
-    dst_ip = sys.argv[1]
+    src_ip = sys.argv[1]
+    if not is_valid_ip(src_ip):
+        print('src_ip: %s is not a valid ip address' % src_ip)
+        sys.exit()
+
+    dst_ip = sys.argv[2]
     if not is_valid_ip(dst_ip):
         print('dst_ip: %s is not a valid ip address' % dst_ip)
         sys.exit()
 
-    packet_sz = int(sys.argv[2])
+    packet_sz = int(sys.argv[3])
     if packet_sz not in PACKET_SIZES:
         print('{} is not a valid packet size.\nPacket must have on of the '
               'follow sizes: {}.'.format(packet_sz, PACKET_SIZES))
         sys.exit()
 
-    src_ip = get_local_ip()
+    if len(sys.argv) == 5:
+        src_port = int(sys.argv[4])
+    else:
+        src_port = DEFAULT_SRC_PORT
 
     print('src ip is %s' % src_ip)
     print('dst ip is %s' % dst_ip)
+    print('src_port is %d' % src_port)
     print('packet size is %d' % packet_sz)
 
-    # Shared memory variables
-    num_pkt_sent = multiprocessing.Value('d', 0)
-    num_pkt_recv = multiprocessing.Value('d', 0)
+    f = open('out.txt', 'w+')
 
-    src_ip, dst_ip == '127.0.0.1', '127.0.0.1'
+    socket_send(src_ip, dst_ip, src_port, packet_sz)
 
-    send_p = multiprocessing.Process(target=socket_send,
-                                     args=(src_ip, dst_ip, packet_sz,
-                                           num_pkt_sent, num_pkt_recv))
-    recv_p = multiprocessing.Process(target=socket_recv,
-                                     args=(src_ip, dst_ip, packet_sz,
-                                           num_pkt_recv))
-
-    recv_p.start()
-    send_p.start()
-    send_p.join()
-    recv_p.join()
+    f.close()
